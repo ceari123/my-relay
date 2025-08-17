@@ -77,7 +77,7 @@ def vector_search():
         return ("", 204)
 
     body = request.get_json(silent=True) or {}
-    user_input = body.get("input") or body.get("question") or ""
+    user_input = body.get("query") or ""
     vs_id = body.get("vector_store_id") or os.environ.get("VECTOR_STORE_ID")
     model = body.get("model") or DEFAULT_MODEL
 
