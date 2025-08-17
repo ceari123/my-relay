@@ -1,4 +1,4 @@
-# relay.py — unified relay with vector store search
+# relay.py — unified relay with vector store search (fixed)
 import os, sys, traceback
 from flask import Flask, request, jsonify
 from openai import OpenAI
@@ -9,7 +9,7 @@ app = Flask(__name__)
 # --- Config via environment ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")  # set this in Render → Environment
-MODEL = os.getenv("MODEL", "gpt-4.1-mini")
+MODEL = os.getenv("MODEL", "gpt-4o-mini")  # recommend a 4o variant for file_search
 
 if not OPENAI_API_KEY:
     print("[BOOT] ERROR: OPENAI_API_KEY not set", file=sys.stderr, flush=True)
@@ -20,7 +20,7 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # --- Simple request logging ---
 @app.before_request
-def _in():  # minimal logging
+def _in():
     try: print(f"[REQ] {request.method} {request.path}", flush=True)
     except: pass
 
@@ -54,11 +54,12 @@ def echo():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 400
 
-# --- Vector search (uses File Search tool on your VECTOR_STORE_ID) ---
+# --- Vector search via Responses API + file_search tool ---
 def _do_vector_search():
     try:
         data = request.get_json(force=True) or {}
         q = (data.get("query") or "").strip()
+        top_k = int(data.get("top_k") or 6)
         if not q:
             return jsonify({"error": "Missing 'query'"}), 400
 
@@ -67,29 +68,36 @@ def _do_vector_search():
         if not VECTOR_STORE_ID:
             return jsonify({"error": "VECTOR_STORE_ID not set on server"}), 500
 
-        # Use extra_body for compatibility across OpenAI SDK versions
+        # ✅ Current, supported payload (no extra_body/tool_resources)
         resp = client.responses.create(
             model=MODEL,
             input=q,
-            tools=[{"type": "file_search"}],
-            extra_body={
-                "tool_resources": {
-                    "file_search": {"vector_store_ids": [VECTOR_STORE_ID]}
-                }
-            },
+            tools=[{
+                "type": "file_search",
+                "vector_store_ids": [VECTOR_STORE_ID],
+                "max_num_results": top_k
+            }],
+            tool_choice="required",   # force using file_search instead of guessing
             temperature=0
         )
 
-        # Extract text (new + older SDK shapes)
+        # Robust output extraction across SDK shapes
         answer = getattr(resp, "output_text", None)
         if not answer:
-            answer = resp.output[0].content[0].text
+            # Fallback: walk the structured output
+            try:
+                answer = resp.output[0].content[0].text
+            except Exception:
+                answer = None
+
+        if not answer:
+            return jsonify({"error": "No answer produced"}), 500
 
         return jsonify({"answer": answer}), 200
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"vector_search_failed: {e}"}), 500
 
 @app.route("/vector-search", methods=["POST"])
 def vector_search():
