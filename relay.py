@@ -8,7 +8,7 @@ from openai import OpenAI
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-ALLOWED_ORIGINS = "*"  # lock to "https://chat.openai.com" if you prefer
+ALLOWED_ORIGINS = "*"
 ALLOWED_METHODS = "GET,POST,OPTIONS"
 ALLOWED_HEADERS = "Content-Type, Authorization, OpenAI-Beta, X-Requested-With"
 
@@ -33,33 +33,22 @@ def echo():
     return jsonify({"you_sent": body}), 200
 
 # ---- OpenAI setup ----
-# Ensure OPENAI_API_KEY is set in Render env vars
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
 DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 def _extract_text(resp):
-    """
-    Robustly extract text from Responses API payloads.
-    Prefer resp.output_text if available; otherwise, walk the content tree.
-    """
     try:
-        # Newer SDKs expose a convenience property
         text = getattr(resp, "output_text", None)
         if text:
             return text.strip()
     except Exception:
         pass
 
-    # Fallback: concatenate any text parts found
     try:
         chunks = []
         for item in getattr(resp, "output", []) or []:
             for c in getattr(item, "content", []) or []:
-                if getattr(c, "type", None) == "output_text" and getattr(c, "text", None):
-                    chunks.append(c.text)
-                # Some SDKs label it simply "text"
-                if getattr(c, "type", None) == "text" and getattr(c, "text", None):
+                if getattr(c, "type", None) in ("output_text", "text") and getattr(c, "text", None):
                     chunks.append(c.text)
         joined = "\n".join([s for s in chunks if s]).strip()
         if joined:
@@ -67,12 +56,10 @@ def _extract_text(resp):
     except Exception:
         pass
 
-    # Last resort: string-ify
     return str(resp)
 
 @app.route("/vector-search", methods=["POST", "OPTIONS"])
 def vector_search():
-    # Fast CORS preflight
     if request.method == "OPTIONS":
         return ("", 204)
 
@@ -81,15 +68,12 @@ def vector_search():
     vs_id = body.get("vector_store_id") or os.environ.get("VECTOR_STORE_ID")
     model = body.get("model") or DEFAULT_MODEL
 
-    # Basic validation
     if not user_input or not isinstance(user_input, str):
-        return jsonify({"error": "Missing 'input' (string) in request body."}), 400
+        return jsonify({"error": "Missing 'query' (string) in request body."}), 400
     if not vs_id:
-        return jsonify({"error": "Missing 'vector_store_id' (pass in body or set VECTOR_STORE_ID env var)."}), 400
+        return jsonify({"error": "Missing 'vector_store_id'. Pass it in the body or set VECTOR_STORE_ID env var."}), 400
 
     try:
-        # Responses API with file_search tool + message-level attachment of the vector store
-        # IMPORTANT: no deprecated extra_body/tool_resources usage.
         resp = client.responses.create(
             model=model,
             tools=[{"type": "file_search"}],
@@ -98,13 +82,10 @@ def vector_search():
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": user_input}
-                    ],
-                    "attachments": [
-                        {"file_search": {"vector_store_ids": [vs_id]}}
-                    ],
+                    ]
                 }
             ],
-            # keep outputs quick for Actions; adjust if you need longer answers
+            file_search={"vector_store_ids": [vs_id]},
             max_output_tokens=600,
         )
 
@@ -116,11 +97,8 @@ def vector_search():
 
     except Exception as e:
         app.logger.exception("vector-search error")
-        # Do NOT leak stack traces to the client
         return jsonify({"error": "Vector search failed.", "detail": str(e)}), 500
 
-# Local dev convenience
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    # For local tests only; Render runs via gunicorn
     app.run(host="0.0.0.0", port=port, debug=True)
