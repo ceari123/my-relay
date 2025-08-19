@@ -93,7 +93,10 @@ def vector_search():
         if not answer_text:
             answer_text = "I couldn't find an answer in the attached notes."
 
-        return jsonify({"answer": answer_text}), 200
+        # Clean the response string to avoid GPT Builder rejection
+        clean_answer = answer_text.replace("\n", " ").strip()
+
+        return jsonify({"answer": clean_answer}), 200
 
     except Exception as e:
         app.logger.exception("vector-search error")
