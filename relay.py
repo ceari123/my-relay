@@ -74,20 +74,18 @@ def vector_search():
         return jsonify({"error": "Missing 'vector_store_id'. Pass it in the body or set VECTOR_STORE_ID env var."}), 400
 
     try:
-        resp = client.responses.create(
-            model=model,
-            tools=[{"type": "file_search"}],
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": user_input}
-                    ]
-                }
-            ],
-            file_search={"vector_store_ids": [vs_id]},
-            max_output_tokens=600,
-        )
+        resp = client.chat.completions.create(
+    model=model,
+    messages=[
+        {
+            "role": "user",
+            "content": user_input
+        }
+    ],
+    tool_choice="file_search",
+    file_search={"vector_store_ids": [vs_id]},
+    max_tokens=600,
+)
 
         answer_text = _extract_text(resp).strip()
         if not answer_text:
